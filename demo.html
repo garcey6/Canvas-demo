@@ -1,0 +1,252 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Canvas Drawing Demo</title>
+<!-- 样式定义 -->
+<style>
+    /* 设置body的外边距为0 */
+    body { margin: 0; }
+    /* canvas绘图区样式，边框为红色，左浮动 */
+    #canvas { border: 2px solid red; float: left; }
+    /* 工具栏样式，位置为相对布局，左浮动并向左偏移10px */
+    .toolbar { position: relative; float: left; margin-left: 10px; top: 0; }
+    /* 按钮样式，宽高为50px，指针样式为可点击，底部有10px的外边距 */
+    .button { width: 50px; height: 50px; cursor: pointer; display: inline-block; margin-bottom: 10px; }
+    /* 选中状态的按钮背景色为黄色 */
+    .selected { background-color: yellow; }
+    /* 颜色选择器样式，宽高为30px，指针样式为可点击，底部有10px的外边距 */
+    .color-selector { width: 30px; height: 30px; cursor: pointer; display: block; margin-bottom: 10px; }
+</style>
+</head>
+<body>
+<!-- 定义一个800x600的canvas画布，背景为白色 -->
+<canvas id="canvas" width="800" height="600" style="background:white;"></canvas>
+<!-- 工具栏，包含画圆按钮、实心按钮和颜色选择器 -->
+<div class="toolbar">
+    <button class="button" id="circle">圆</button>
+    <button class="button" id="fill">实心</button>
+    <input class="color-selector" id="color" type="color" value="#000000">
+</div>
+
+<script>
+// 获取canvas元素和其2D绘图上下文
+const canvas = document.getElementById('canvas');
+const ctx = canvas.getContext('2d');
+
+// 定义状态变量：是否选择画圆、是否选择实心、选择的颜色，形状列表
+let isCircleSelected = false;
+let isFillSelected = false;
+let selectedColor = '#000000';
+let shapes = [];  // 存储绘制的所有形状
+let currentShape = null;  // 当前正在绘制的形状
+let hoveredShape = null;  // 鼠标悬停的形状
+let isDragging = false;   // 是否正在拖动形状
+let resizingShape = null; // 当前正在调整大小的形状
+let oppositePoint = null; // 调整大小时记录的对角点
+
+// 点击"圆"按钮的事件监听，切换画圆模式
+document.getElementById('circle').addEventListener('click', () => {
+    isCircleSelected = !isCircleSelected;
+    updateButtonState();
+});
+
+// 点击"实心"按钮的事件监听，切换实心模式
+document.getElementById('fill').addEventListener('click', () => {
+    isFillSelected = !isFillSelected;
+    updateButtonState();
+});
+
+// 颜色选择器的输入事件监听，更新所选颜色
+document.getElementById('color').addEventListener('input', (event) => {
+    selectedColor = event.target.value;
+    document.getElementById('color').style.backgroundColor = selectedColor;
+});
+
+// 更新按钮的选中状态
+function updateButtonState() {
+    document.getElementById('circle').classList.toggle('selected', isCircleSelected);
+    document.getElementById('fill').classList.toggle('selected', isFillSelected);
+}
+
+// 画布的鼠标事件监听
+canvas.addEventListener('mousedown', startDrawingOrDragging);
+canvas.addEventListener('mousemove', drawOrHighlight);
+canvas.addEventListener('mouseup', endDrawingOrDragging);
+canvas.addEventListener('mouseout', endDrawingOrDragging);
+
+// 鼠标按下事件：开始绘制或拖动
+function startDrawingOrDragging(e) {
+    const [mouseX, mouseY] = getMousePos(canvas, e);
+
+    // 如果鼠标悬停在某个形状上，则进行拖动或调整大小操作
+    hoveredShape = findHoveredShape(mouseX, mouseY);
+    if (hoveredShape) {
+        if (isNearEdge(mouseX, mouseY, hoveredShape)) {
+            // 如果靠近边缘，准备调整形状大小
+            resizingShape = hoveredShape;
+            oppositePoint = getOppositeEdge(mouseX, mouseY, hoveredShape);
+        } else {
+            // 开始拖动形状
+            isDragging = true;
+            hoveredShape.offsetX = mouseX - hoveredShape.x;
+            hoveredShape.offsetY = mouseY - hoveredShape.y;
+            bringShapeToFront(hoveredShape);  // 将形状移至前面
+        }
+        return;
+    }
+
+    // 如果没有选择画圆，则不执行绘制操作
+    if (!isCircleSelected) return;
+
+    // 开始绘制圆形
+    const [startX, startY] = getMousePos(canvas, e);
+    currentShape = new Circle(startX, startY, 0, isFillSelected, selectedColor);
+}
+
+// 鼠标移动事件：绘制或高亮显示形状
+function drawOrHighlight(e) {
+    const [mouseX, mouseY] = getMousePos(canvas, e);
+    ctx.clearRect(0, 0, canvas.width, canvas.height);  // 清空画布
+
+    // 绘制所有形状
+    shapes.forEach(drawShape);
+
+    // 如果正在调整形状大小，则更新形状大小
+    if (resizingShape) {
+        const newRadius = Math.sqrt(Math.pow(mouseX - oppositePoint[0], 2) + Math.pow(mouseY - oppositePoint[1], 2)) / 2;
+        const newCenterX = (mouseX + oppositePoint[0]) / 2;
+        const newCenterY = (mouseY + oppositePoint[1]) / 2;
+        resizingShape.x = newCenterX;
+        resizingShape.y = newCenterY;
+        resizingShape.radius = newRadius;
+        resizingShape.draw(ctx);
+        drawResizeHandles(resizingShape);  // 绘制调整大小的把手
+        return;
+    }
+
+    // 如果正在拖动形状，则更新形状位置
+    if (isDragging && hoveredShape) {
+        hoveredShape.x = mouseX - hoveredShape.offsetX;
+        hoveredShape.y = mouseY - hoveredShape.offsetY;
+        hoveredShape.draw(ctx);
+        return;
+    }
+
+    // 如果正在绘制新形状，更新其半径
+    if (currentShape) {
+        const [currentX, currentY] = getMousePos(canvas, e);
+        const radius = Math.sqrt(Math.pow(currentX - currentShape.x, 2) + Math.pow(currentY - currentShape.y, 2));
+        currentShape.radius = radius;
+        currentShape.draw(ctx);
+    } else {
+        // 否则，高亮显示悬停的形状
+        hoveredShape = findHoveredShape(mouseX, mouseY);
+        if (hoveredShape) {
+            hoveredShape.highlight(ctx);
+            if (isNearEdge(mouseX, mouseY, hoveredShape)) {
+                drawResizeHandles(hoveredShape);  // 绘制调整大小的把手
+            }
+        }
+    }
+}
+
+// 鼠标释放事件：结束绘制或拖动
+function endDrawingOrDragging() {
+    if (currentShape) {
+        shapes.push(currentShape);  // 将新形状添加到形状列表
+        currentShape = null;
+    }
+    isDragging = false;
+    resizingShape = null;
+    oppositePoint = null;
+}
+
+// 获取鼠标在画布中的位置
+function getMousePos(canvas, evt) {
+    const rect = canvas.getBoundingClientRect();
+    return [
+        evt.clientX - rect.left,
+        evt.clientY - rect.top
+    ];
+}
+
+// 定义圆形类
+class Circle {
+    constructor(x, y, radius, fill, color) {
+        this.x = x;
+        this.y = y;
+        this.radius = radius;
+        this.fill = fill;
+        this.color = color;
+        this.originalColor = color;
+    }
+
+    // 绘制圆形
+    draw(ctx) {
+        ctx.beginPath();
+        ctx.arc(this.x, this.y, this.radius, 0, 2 * Math.PI);
+        ctx.strokeStyle = this.color;
+        ctx.lineWidth = 2;
+        ctx.fillStyle = this.fill ? this.color : 'transparent';
+        ctx.stroke();
+        if (this.fill) ctx.fill();
+    }
+
+    // 高亮圆形（更改颜色）
+    highlight(ctx) {
+        this.color = 'orange';
+        this.draw(ctx);
+        this.color = this.originalColor;
+    }
+}
+
+// 绘制形状
+function drawShape(shape) {
+    shape.draw(ctx);
+}
+
+// 将形状移至最前面
+function bringShapeToFront(shape) {
+    const index = shapes.indexOf(shape);
+    if (index > -1) {
+        shapes.splice(index, 1);
+        shapes.push(shape);
+    }
+}
+
+// 查找鼠标悬停的形状
+function findHoveredShape(x, y) {
+    return shapes.slice().reverse().find(shape => {
+        const dist = Math.sqrt(Math.pow(shape.x - x, 2) + Math.pow(shape.y - y, 2));
+        return dist <= shape.radius;
+    });
+}
+
+// 判断鼠标是否靠近形状边缘
+function isNearEdge(x, y, shape) {
+    const dist = Math.sqrt(Math.pow(shape.x - x, 2) + Math.pow(shape.y - y, 2));
+    return dist >= shape.radius - 5 && dist <= shape.radius + 5;
+}
+
+// 绘制调整大小的把手
+function drawResizeHandles(shape) {
+    const handle1 = { x: shape.x + shape.radius, y: shape.y };
+    const handle2 = { x: shape.x - shape.radius, y: shape.y };
+    ctx.beginPath();
+    ctx.arc(handle1.x, handle1.y, 5, 0, 2 * Math.PI);
+    ctx.arc(handle2.x, handle2.y, 5, 0, 2 * Math.PI);
+    ctx.fillStyle = 'blue';
+    ctx.fill();
+}
+
+// 获取调整大小的对角点
+function getOppositeEdge(mouseX, mouseY, shape) {
+    const angle = Math.atan2(mouseY - shape.y, mouseX - shape.x);
+    const oppositeX = shape.x - Math.cos(angle) * shape.radius;
+    const oppositeY = shape.y - Math.sin(angle) * shape.radius;
+    return [oppositeX, oppositeY];
+}
+</script>
+</body>
+</html>
